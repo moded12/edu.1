@@ -1,52 +1,50 @@
 <?php
 // FILE: admin/views/save_lesson.php
-require_once '../../config/db.php';
+require_once '../core/db.php';
 
-function sanitize($value) {
-  return htmlspecialchars(trim($value), ENT_QUOTES, 'UTF-8');
+// استقبال البيانات
+$class_id     = $_POST['class_id'] ?? null;
+$material_id  = $_POST['material_id'] ?? null;
+$semester_id  = $_POST['semester_id'] ?? null;
+$section_id   = $_POST['section_id'] ?? null;
+$group_id     = $_POST['group_id'] ?? null;
+$name         = $_POST['lesson_name'] ?? '';
+$link         = $_POST['external_link'] ?? '';
+
+if (!$class_id || !$material_id || !$semester_id || !$section_id || !$group_id || !$name) {
+    die('❌ بيانات ناقصة');
 }
 
-$lesson_name = sanitize($_POST['lesson_name'] ?? '');
-$slug = sanitize($_POST['slug'] ?? '');
-$description = sanitize($_POST['description'] ?? '');
-$application_id = intval($_POST['application_id'] ?? 0);
-$class_id = intval($_POST['class_id'] ?? 0);
-$material_id = intval($_POST['material_id'] ?? 0);
-$semester_id = intval($_POST['semester_id'] ?? 0);
-$section_id = intval($_POST['section_id'] ?? 0);
-$group_id = intval($_POST['group_id'] ?? 0);
-$type = $_POST['attachment_type'] ?? '';
-$external_url = sanitize($_POST['external_url'] ?? '');
+// إدخال الدرس
+$stmt = $conn->prepare("INSERT INTO lessons (class_id, material_id, semester_id, section_id, group_id, name, external_link) VALUES (?, ?, ?, ?, ?, ?, ?)");
+$stmt->bind_param("iiiiiss", $class_id, $material_id, $semester_id, $section_id, $group_id, $name, $link);
+$stmt->execute();
+$lesson_id = $stmt->insert_id;
 
-if ($lesson_name && $group_id) {
-  $stmt = $conn->prepare("INSERT INTO lessons (group_id, name, slug, description) VALUES (?, ?, ?, ?)");
-  $stmt->bind_param("isss", $group_id, $lesson_name, $slug, $description);
-  $stmt->execute();
-  $lesson_id = $stmt->insert_id;
-  $stmt->close();
+// تجهيز مجلد التخزين
+$date_folder = date("Y-m");
+$upload_base = "uploads/lessons/{$date_folder}";
+$image_dir = "$upload_base/image";
+$pdf_dir = "$upload_base/pdf";
+@mkdir($image_dir, 0777, true);
+@mkdir($pdf_dir, 0777, true);
 
-  // Handle attachment
-  if ($type === 'url' && !empty($external_url)) {
-    $conn->query("INSERT INTO attachments (lesson_id, type, url, title) VALUES ($lesson_id, '$type', '$external_url', '$lesson_name')");
-  } elseif (!empty($_FILES['file']['name'])) {
-    $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION);
-    $folder = strtolower($type);
-    $date = date('Y-m');
-    $uploadDir = "../../views/uploads/lessons/$date/$folder/";
-    if (!is_dir($uploadDir)) {
-      mkdir($uploadDir, 0777, true);
+// معالجة الملفات
+foreach ($_FILES['attachment']['tmp_name'] as $key => $tmp_name) {
+    if ($_FILES['attachment']['error'][$key] === 0) {
+        $filename = uniqid() . '_' . basename($_FILES['attachment']['name'][$key]);
+        $filetype = mime_content_type($tmp_name);
+        $ext = pathinfo($filename, PATHINFO_EXTENSION);
+        $target = (str_contains($filetype, 'pdf') ? $pdf_dir : $image_dir) . '/' . $filename;
+        if (move_uploaded_file($tmp_name, $target)) {
+            $type = str_contains($filetype, 'pdf') ? 'pdf' : 'image';
+            $stmt2 = $conn->prepare("INSERT INTO lesson_files (lesson_id, file_path, type) VALUES (?, ?, ?)");
+            $stmt2->bind_param("iss", $lesson_id, $target, $type);
+            $stmt2->execute();
+        }
     }
-
-    $newName = uniqid() . '_' . basename($_FILES['file']['name']);
-    $targetFile = $uploadDir . $newName;
-
-    if (move_uploaded_file($_FILES['file']['tmp_name'], $targetFile)) {
-      $relativePath = "/admin/views/uploads/lessons/$date/$folder/$newName";
-      $conn->query("INSERT INTO attachments (lesson_id, type, url, title) VALUES ($lesson_id, '$type', '$relativePath', '$lesson_name')");
-    }
-  }
 }
 
-header("Location: add_lessons.php?saved=1");
+header("Location: add_lessons.php?success=1");
 exit;
 ?>
